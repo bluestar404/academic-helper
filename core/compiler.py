@@ -66,16 +66,14 @@ def compile_exam_paper(
     latex = transpile(paper, template_name=template_name, project_root=project_root)
 
     work_dir = Path(tempfile.mkdtemp(prefix="academic_helper_"))
-    try:
-        tex_path = work_dir / "paper.tex"
-        tex_path.write_text(latex, encoding="utf-8")
-        pdf_path = run_tectonic(tectonic, work_dir)
+    tex_path = work_dir / "paper.tex"
+    tex_path.write_text(latex, encoding="utf-8")
+    pdf_path = run_tectonic(tectonic, work_dir)
 
-        final_pdf = pdf_path
-        if output_dir is not None:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            final_pdf = output_dir / "paper.pdf"
-            shutil.copy2(pdf_path, final_pdf)
-        return tex_path, final_pdf
-    finally:
+    final_pdf = pdf_path
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        final_pdf = output_dir / "paper.pdf"
+        shutil.copy2(pdf_path, final_pdf)
         shutil.rmtree(work_dir, ignore_errors=True)
+    return tex_path, final_pdf

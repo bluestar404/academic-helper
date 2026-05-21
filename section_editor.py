@@ -18,7 +18,10 @@ from PySide6.QtWidgets import (
 
 COL_NUMBER = 0
 COL_TEXT = 1
-COL_MARKS = 2
+COL_PARTS = 2
+COL_MARKS = 3
+PARTS_SEP = ";"
+PART_FIELD_SEP = "|"
 
 
 class SectionEditor(QWidget):
@@ -35,10 +38,15 @@ class SectionEditor(QWidget):
         form.addRow("Instructions", self.instructions_input)
         layout.addLayout(form)
 
-        self.questions_table = QTableWidget(0, 3)
-        self.questions_table.setHorizontalHeaderLabels(["#", "Question text", "Marks"])
+        self.questions_table = QTableWidget(0, 4)
+        self.questions_table.setHorizontalHeaderLabels(
+            ["#", "Question / stem", "Sub-parts (a|text|5;b|...)", "Marks"]
+        )
         self.questions_table.horizontalHeader().setSectionResizeMode(
             COL_TEXT, QHeaderView.ResizeMode.Stretch
+        )
+        self.questions_table.horizontalHeader().setSectionResizeMode(
+            COL_PARTS, QHeaderView.ResizeMode.Stretch
         )
         self.questions_table.horizontalHeader().setSectionResizeMode(
             COL_NUMBER, QHeaderView.ResizeMode.ResizeToContents
@@ -81,6 +89,7 @@ class SectionEditor(QWidget):
         self.questions_table.insertRow(row)
         self.questions_table.setItem(row, COL_NUMBER, QTableWidgetItem(str(row + 1)))
         self.questions_table.setItem(row, COL_TEXT, QTableWidgetItem(""))
+        self.questions_table.setItem(row, COL_PARTS, QTableWidgetItem(""))
         self.questions_table.setItem(row, COL_MARKS, QTableWidgetItem("5"))
         self._emit_marks_changed()
 
@@ -108,9 +117,42 @@ class SectionEditor(QWidget):
             self.questions_table.setItem(
                 row, COL_TEXT, QTableWidgetItem(q.get("text", ""))
             )
+            parts_cell = ""
+            if q.get("sub_questions"):
+                chunks = []
+                for sq in q["sub_questions"]:
+                    label = sq.get("label", "a").rstrip(")")
+                    chunks.append(
+                        f"{label}{PART_FIELD_SEP}{sq.get('text', '')}"
+                        f"{PART_FIELD_SEP}{sq.get('marks', 1)}"
+                    )
+                parts_cell = PARTS_SEP.join(chunks)
+            self.questions_table.setItem(row, COL_PARTS, QTableWidgetItem(parts_cell))
             self.questions_table.setItem(
                 row, COL_MARKS, QTableWidgetItem(str(q.get("marks", 1)))
             )
+
+    @staticmethod
+    def _parse_sub_parts(raw: str) -> list[dict[str, Any]]:
+        parts: list[dict[str, Any]] = []
+        for chunk in raw.split(PARTS_SEP):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            fields = [f.strip() for f in chunk.split(PART_FIELD_SEP)]
+            if len(fields) < 3:
+                raise ValueError(
+                    "Sub-parts format: label|text|marks separated by ';' "
+                    "(e.g. a|Define locks|5;b|Explain RMI|5)"
+                )
+            label, text, marks_s = fields[0], fields[1], fields[2]
+            if not marks_s.isdigit() or int(marks_s) < 1:
+                raise ValueError("Sub-part marks must be positive integers.")
+            label_fmt = label if label.endswith(")") else f"{label})"
+            parts.append(
+                {"label": label_fmt, "text": text, "marks": int(marks_s)}
+            )
+        return parts
 
     def to_section_dict(self) -> dict[str, Any]:
         code = self.code_input.text().strip()
@@ -123,20 +165,33 @@ class SectionEditor(QWidget):
         questions: list[dict[str, Any]] = []
         for row in range(self.questions_table.rowCount()):
             text_item = self.questions_table.item(row, COL_TEXT)
+            parts_item = self.questions_table.item(row, COL_PARTS)
             marks_item = self.questions_table.item(row, COL_MARKS)
             num_item = self.questions_table.item(row, COL_NUMBER)
             text = (text_item.text() if text_item else "").strip()
-            if not text:
+            parts_raw = (parts_item.text() if parts_item else "").strip()
+            if not text and not parts_raw:
                 continue
+            if not text:
+                text = " "
             marks_raw = (marks_item.text() if marks_item else "").strip()
             if not marks_raw.isdigit() or int(marks_raw) < 1:
                 raise ValueError(
                     f"Section {code}, row {row + 1}: marks must be a positive integer."
                 )
             number = int((num_item.text() if num_item else "").strip() or row + 1)
-            questions.append(
-                {"number": number, "text": text, "marks": int(marks_raw)}
-            )
+            entry: dict[str, Any] = {
+                "number": number,
+                "text": text,
+                "marks": int(marks_raw),
+            }
+            if parts_raw:
+                entry["sub_questions"] = self._parse_sub_parts(parts_raw)
+                if sum(p["marks"] for p in entry["sub_questions"]) != entry["marks"]:
+                    raise ValueError(
+                        f"Section {code}, Q{number}: marks must equal sum of sub-parts."
+                    )
+            questions.append(entry)
 
         if not questions:
             raise ValueError(f"Section {code}: add at least one question.")
@@ -149,13 +204,41 @@ class SectionEditor(QWidget):
             "questions": questions,
         }
 
-    def add_sample_question(self) -> None:
+    def add_sample_question(self, *, sppu_style: bool = False) -> None:
         if self.questions_table.rowCount() == 0:
             self._add_row()
         self.questions_table.setItem(0, COL_NUMBER, QTableWidgetItem("1"))
-        self.questions_table.setItem(
-            0,
-            COL_TEXT,
-            QTableWidgetItem("Define polymorphism and inheritance."),
-        )
-        self.questions_table.setItem(0, COL_MARKS, QTableWidgetItem("5"))
+        if sppu_style:
+            self.instructions_input.setText(
+                "Answer Q.1 or Q.2, Q.3 or Q.4; Figures to the right indicate full marks.; "
+                "Assume suitable data, if necessary."
+            )
+            self.questions_table.setItem(0, COL_TEXT, QTableWidgetItem(" "))
+            self.questions_table.setItem(
+                0,
+                COL_PARTS,
+                QTableWidgetItem(
+                    "a|What are Locks? Explain Distributed Lock services using Timestamps.|5;"
+                    "b|What is JAVA RMI? How do we create Java RMI? Similarity with web service?|5"
+                ),
+            )
+            self.questions_table.setItem(0, COL_MARKS, QTableWidgetItem("10"))
+            self._add_row()
+            self.questions_table.setItem(1, COL_NUMBER, QTableWidgetItem("2"))
+            self.questions_table.setItem(1, COL_TEXT, QTableWidgetItem(" "))
+            self.questions_table.setItem(
+                1,
+                COL_PARTS,
+                QTableWidgetItem(
+                    "a|Explain single-copy and Multi-copy distributed shared memory.|5;"
+                    "b|Define Service oriented architecture. List four SOA characteristics.|5"
+                ),
+            )
+            self.questions_table.setItem(1, COL_MARKS, QTableWidgetItem("10"))
+        else:
+            self.questions_table.setItem(
+                0,
+                COL_TEXT,
+                QTableWidgetItem("Define polymorphism and inheritance."),
+            )
+            self.questions_table.setItem(0, COL_MARKS, QTableWidgetItem("5"))

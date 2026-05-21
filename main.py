@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from app_window import AppWindow
 from core.compiler import resolve_tectonic
 from core.template_engine import templates_dir
+from ui_theme import APP_STYLESHEET
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -54,6 +55,8 @@ def load_config() -> dict[str, Any]:
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Academic Helper")
+    app.setStyle("Fusion")
+    app.setStyleSheet(APP_STYLESHEET)
 
     try:
         config = load_config()

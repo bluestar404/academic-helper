@@ -1,6 +1,15 @@
 {{DOCUMENT_PREAMBLE}}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+\fancyhead[L]{\small\textcolor{examblue}{\textbf{Examination Paper}}}
+\fancyhead[R]{\small\textcolor{examblue}{\today}}
+\fancyfoot[C]{\small\thepage}
+
 \begin{document}
-{{DOCUMENT_HEADER}}
-{{DOCUMENT_BODY}}
+\sloppy
+{{CONTENT}}
 {{DOCUMENT_FOOTER}}
 \end{document}

@@ -1,7 +1,5 @@
 """
-Pure functional LaTeX transpiler: ExamPaper -> complete document string.
-
-Layout fragments are injected into templates from templates/*.template.tex.
+LaTeX transpiler: ExamPaper -> fragments for flexible templates.
 """
 
 from __future__ import annotations
@@ -9,51 +7,79 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.models import ExamPaper, Question, Section, SubQuestion
-from core.template_engine import load_template, render_template, templates_dir
+from core.sppu_layout import (
+    render_sppu_content,
+    render_sppu_preamble,
+)
+from core.template_engine import expand_context, load_template, render_template, templates_dir
 
-# --- Default preamble fragment (injected into templates) ---
+SPPU_TEMPLATE = "sppu_original"
+
 _DOCUMENT_CLASS = r"\documentclass[11pt,a4paper]{article}"
-_PACKAGES = r"""\usepackage[margin=2.5cm,top=2.8cm,bottom=2.5cm]{geometry}
+_PACKAGES = r"""\usepackage[margin=2cm,top=2.2cm,bottom=2.2cm]{geometry}
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
 \usepackage{lmodern}
 \usepackage{array}
 \usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage{xcolor}
 \usepackage{enumitem}
 \usepackage{parskip}
+\usepackage{tikz}
 """
-_PREAMBLE_SPACING = r"""\setlength{\parskip}{6pt}
+_PREAMBLE_SPACING = r"""\definecolor{examblue}{RGB}{25,55,109}
+\definecolor{examrule}{RGB}{180,190,210}
+\definecolor{examlight}{RGB}{245,247,252}
+\setlength{\parskip}{7pt}
 \setlength{\parindent}{0pt}
-\renewcommand{\arraystretch}{1.35}
-\setlist{nosep,leftmargin=1.4em}
+\renewcommand{\arraystretch}{1.4}
+\setlist{nosep,leftmargin=1.5em}
 """
-_TITLE_FONT_SIZE = r"\LARGE"
-_SUBTITLE_FONT_SIZE = r"\large"
-_META_FONT_SIZE = r"\normalsize"
-_SECTION_FONT_SIZE = r"\large"
-_BODY_FONT_SIZE = r"\normalsize"
-
-_QUESTION_TABLE_SPEC = r"@{}p{1.1cm}X r@{}"
-_SUB_QUESTION_TABLE_SPEC = r"@{}p{1.4cm}X r@{}"
+_QUESTION_TABLE_SPEC = r"@{}>{\bfseries}p{1.2cm}X>{\raggedleft\arraybackslash}p{1.5cm}@{}"
+_SUB_QUESTION_TABLE_SPEC = r"@{}p{1.5cm}X r@{}"
 
 
 def _font_block(font_cmd: str, content: str) -> str:
-    """Wrap content so font commands are not merged with text (e.g. \\largeTitle)."""
     return f"{{{font_cmd} {{{content}}}}}"
 
 
-def build_render_context(paper: ExamPaper) -> dict[str, str]:
-    """Build placeholder map for template rendering."""
-    return {
-        "DOCUMENT_PREAMBLE": "\n".join(
-            [_DOCUMENT_CLASS, _PACKAGES, _PREAMBLE_SPACING]
-        ),
-        "DOCUMENT_HEADER": _render_header(paper),
-        "DOCUMENT_BODY": "\n".join(
-            _render_section(section) for section in paper.sections
-        ),
-        "DOCUMENT_FOOTER": "",
+def build_render_context(
+    paper: ExamPaper,
+    *,
+    template_name: str = "default",
+) -> dict[str, str]:
+    if normalize_template_name(template_name) == SPPU_TEMPLATE:
+        content = render_sppu_content(paper)
+        base = {
+            "DOCUMENT_PREAMBLE": render_sppu_preamble(),
+            "DOCUMENT_HEADER": "",
+            "DOCUMENT_BODY": content,
+            "DOCUMENT_FOOTER": "",
+            "CONTENT": content,
+        }
+        return expand_context(base)
+
+    header = _render_header(paper)
+    body = "\n".join(_render_section(section) for section in paper.sections)
+    footer = ""
+    preamble = "\n".join([_DOCUMENT_CLASS, _PACKAGES, _PREAMBLE_SPACING])
+    content = "\n\n".join(part for part in (header, body, footer) if part)
+
+    base = {
+        "DOCUMENT_PREAMBLE": preamble,
+        "DOCUMENT_HEADER": header,
+        "DOCUMENT_BODY": body,
+        "DOCUMENT_FOOTER": footer,
+        "CONTENT": content,
     }
+    return expand_context(base)
+
+
+def normalize_template_name(name: str) -> str:
+    from core.template_engine import normalize_template_name as _norm
+
+    return _norm(name)
 
 
 def transpile(
@@ -63,65 +89,75 @@ def transpile(
     project_root: Path | None = None,
     templates_path: Path | None = None,
 ) -> str:
-    """Render exam paper using the named template file."""
-    context = build_render_context(paper)
+    context = build_render_context(paper, template_name=template_name)
     if templates_path is None:
         if project_root is None:
             raise ValueError("project_root or templates_path is required")
         templates_path = templates_dir(project_root)
     source = load_template(templates_path, template_name)
-    return render_template(source, context)
+    return render_template(source, context, strict=False)
 
 
 def _render_header(paper: ExamPaper) -> str:
-    lines: list[str] = [
-        _BODY_FONT_SIZE,
+    meta_parts: list[str] = [f"Total marks: {paper.total_marks}"]
+    if paper.duration_minutes is not None:
+        meta_parts.append(f"Duration: {paper.duration_minutes} min")
+    meta_line = r" \textbullet\ ".join(meta_parts)
+
+    lines = [
         r"\begin{center}",
-        f"{{{_TITLE_FONT_SIZE}\\textbf{{{paper.title}}}}}",
+        r"\begin{tikzpicture}",
+        r"\node[fill=examlight, rounded corners=4pt, inner sep=14pt, text width=0.92\linewidth] (box) {",
+        f"{{\\fontsize{{18}}{{22}}\selectfont\\textcolor{{examblue}}{{\\textbf{{{paper.title}}}}}}}",
     ]
     if paper.subtitle:
-        lines.append(f"\\\\[4pt]{_font_block(_SUBTITLE_FONT_SIZE, paper.subtitle)}")
+        lines.append(
+            f"\\\\[6pt]{{\\large\\textcolor{{examblue}}{{{paper.subtitle}}}}}"
+        )
     if paper.institution:
-        lines.append(f"\\\\[6pt]{_font_block(_META_FONT_SIZE, paper.institution)}")
-    meta_parts: list[str] = [
-        f"Total Marks: {paper.total_marks}",
-        f"(Calculated: {paper.calculated_total_marks})",
-    ]
-    if paper.duration_minutes is not None:
-        meta_parts.append(f"Duration: {paper.duration_minutes} minutes")
-    meta_line = " \\quad|\\quad ".join(meta_parts)
-    lines.append(f"\\\\[8pt]{_font_block(_META_FONT_SIZE, meta_line)}")
-    lines.extend([r"\end{center}", r"\vspace{12pt}", r"\hrule", r"\vspace{14pt}"])
+        lines.append(f"\\\\[4pt]{{\\normalsize {paper.institution}}}")
+    lines.append(f"\\\\[8pt]{{\\small {meta_line}}}")
+    lines.extend([r"};", r"\end{tikzpicture}", r"\end{center}", r"\vspace{10pt}"])
     return "\n".join(lines)
 
 
 def _render_section(section: Section) -> str:
     lines = [
-        f"{{{_SECTION_FONT_SIZE}\\textbf{{Section {section.code}: {section.title}}}}}",
+        r"\vspace{6pt}",
+        r"\noindent\colorbox{examlight}{%",
+        r"\begin{minipage}{\dimexpr\linewidth-2\fboxsep}",
+        f"\\textcolor{{examblue}}{{\\large\\textbf{{Section {section.code}: {section.title}}}}}"
         f"\\hfill\\textbf{{[{section.calculated_marks} marks]}}",
-        r"\par\vspace{8pt}",
+        r"\end{minipage}%",
+        r"}",
+        r"\vspace{8pt}",
     ]
     if section.instructions:
         lines.extend(
             [
-                r"\textbf{Instructions:} " + section.instructions,
-                r"\par\vspace{10pt}",
+                r"\textit{\textbf{Instructions:}} " + section.instructions,
+                r"\par\vspace{8pt}",
             ]
         )
-    lines.append(
-        r"\noindent\begin{tabularx}{\linewidth}{" + _QUESTION_TABLE_SPEC + "}"
+    lines.extend(
+        [
+            r"\noindent\begin{tabularx}{\linewidth}{" + _QUESTION_TABLE_SPEC + "}",
+            r"\toprule",
+            r"\textbf{Q\#} & \textbf{Question} & \textbf{Marks} \\",
+            r"\midrule",
+        ]
     )
-    for question in section.questions:
+    for i, question in enumerate(section.questions):
         lines.append(_render_question_row(question))
-    lines.extend([r"\end{tabularx}", r"\vspace{18pt}"])
+        if i < len(section.questions) - 1:
+            lines.append(r"\addlinespace[3pt]")
+    lines.extend([r"\bottomrule", r"\end{tabularx}", r"\vspace{16pt}"])
     return "\n".join(lines)
 
 
 def _render_question_row(question: Question) -> str:
-    marks_cell = f"\\textbf{{[{question.marks}]}}"
-    row = (
-        f"\\textbf{{{question.number}.}} & {question.text} & {marks_cell} \\\\"
-    )
+    marks_cell = f"\\textbf{{{question.marks}}}"
+    row = f"{question.number}. & {question.text} & {marks_cell} \\\\"
     if not question.sub_questions:
         return row
     return "\n".join([row, _render_sub_questions(question.sub_questions)])
@@ -131,7 +167,7 @@ def _render_sub_questions(sub_questions: list[SubQuestion]) -> str:
     rows = "\n".join(_render_sub_question_row(sq) for sq in sub_questions)
     return (
         f"\\multicolumn{{3}}{{@{{}}l}}{{%\n"
-        f"\\begin{{tabularx}}{{\\linewidth}}{{{_SUB_QUESTION_TABLE_SPEC}}}\n"
+        f"\\hspace{{1.2cm}}\\begin{{tabularx}}{{\\dimexpr\\linewidth-1.2cm}}{{{_SUB_QUESTION_TABLE_SPEC}}}\n"
         f"{rows}\n"
         f"\\end{{tabularx}}%\n"
         f"}} \\\\"
@@ -139,5 +175,4 @@ def _render_sub_questions(sub_questions: list[SubQuestion]) -> str:
 
 
 def _render_sub_question_row(sub: SubQuestion) -> str:
-    marks_cell = f"[{sub.marks}]"
-    return f"{sub.label} & {sub.text} & {marks_cell} \\\\"
+    return f"{sub.label} & {sub.text} & {sub.marks} \\\\"

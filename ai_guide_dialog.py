@@ -84,7 +84,9 @@ def _build_guide_text(
     if sample_exam_data:
         try:
             paper = ExamPaper.model_validate(sample_exam_data)
-            sample_context = build_render_context(paper)
+            sample_context = build_render_context(
+                paper, template_name=logical_name
+            )
         except Exception:
             sample_context = None
 
