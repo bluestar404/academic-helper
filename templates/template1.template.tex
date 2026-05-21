@@ -1,0 +1,63 @@
+{{DOCUMENT_PREAMBLE}}
+
+% --- Additional styling for demo template ---
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{titlesec}
+\usepackage{tcolorbox}
+
+\definecolor{primary}{RGB}{25,55,109}
+\definecolor{secondary}{RGB}{230,235,245}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textcolor{primary}{\textbf{Academic Helper}}}
+\fancyhead[R]{\textcolor{primary}{Question Paper}}
+\fancyfoot[C]{Page \thepage\ of \pageref{LastPage}}
+
+\renewcommand{\headrulewidth}{0.5pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\titleformat{\section}
+{\large\bfseries\color{primary}}
+{}{0em}{}
+
+\begin{document}
+
+% --- Header Container ---
+\begin{tcolorbox}[
+colback=secondary,
+colframe=primary,
+arc=4pt,
+boxrule=0.8pt,
+left=10pt,
+right=10pt,
+top=10pt,
+bottom=10pt
+]
+{{DOCUMENT_HEADER}}
+\end{tcolorbox}
+
+\vspace{10pt}
+
+% --- Instructions Block ---
+\begin{center}
+\textit{\small Please read all instructions carefully before answering.}
+\end{center}
+
+\vspace{8pt}
+
+% --- Main Exam Content ---
+{{DOCUMENT_BODY}}
+
+\vfill
+
+% --- Footer Note ---
+\begin{center}
+\textcolor{gray}{\small End of Question Paper}
+\end{center}
+
+{{DOCUMENT_FOOTER}}
+
+\end{document}

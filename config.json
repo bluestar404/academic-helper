@@ -1,0 +1,7 @@
+{
+  "window_title": "Academic Helper",
+  "tectonic_path": "vendor/tectonic.exe",
+  "output_dir": "output",
+  "templates_dir": "templates",
+  "default_template": "default"
+}

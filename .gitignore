@@ -1,0 +1,10 @@
+.venv/
+vendor/tectonic
+vendor/tectonic.exe
+__pycache__/
+*.pyc
+.pytest_cache/
+output/
+*.pdf
+
+
