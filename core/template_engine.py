@@ -1,4 +1,4 @@
-"""Load and render LaTeX templates from the templates/ directory."""
+"""Flexible LaTeX template loading and placeholder rendering."""
 
 from __future__ import annotations
 
@@ -8,17 +8,33 @@ from pathlib import Path
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([A-Z][A-Z0-9_]*)\}\}")
 
-REQUIRED_PLACEHOLDERS = frozenset(
+# Canonical keys the app always supplies
+STANDARD_KEYS = frozenset(
     {
         "DOCUMENT_PREAMBLE",
         "DOCUMENT_HEADER",
         "DOCUMENT_BODY",
+        "DOCUMENT_FOOTER",
+        "CONTENT",
+        "PREAMBLE",
+        "HEADER",
+        "BODY",
+        "FOOTER",
+        "FULL_DOCUMENT",
     }
 )
 
-KNOWN_PLACEHOLDERS = REQUIRED_PLACEHOLDERS | {
-    "DOCUMENT_FOOTER",
-}
+# At least one of these must appear in a template
+INJECTION_POINTS = frozenset(
+    {
+        "FULL_DOCUMENT",
+        "CONTENT",
+        "DOCUMENT_BODY",
+        "BODY",
+        "DOCUMENT_HEADER",
+        "HEADER",
+    }
+)
 
 
 def templates_dir(project_root: Path, configured: str | None = None) -> Path:
@@ -31,7 +47,6 @@ def templates_dir(project_root: Path, configured: str | None = None) -> Path:
 
 
 def normalize_template_name(name: str) -> str:
-    """Map UI name to file stem: ``default`` -> ``default``, not ``default.template``."""
     logical = name.strip()
     if logical.endswith(".template.tex"):
         logical = logical[: -len(".template.tex")]
@@ -66,64 +81,128 @@ def extract_placeholders(template_source: str) -> set[str]:
     return set(PLACEHOLDER_PATTERN.findall(template_source))
 
 
-def validate_template_source(template_source: str) -> list[str]:
-    """Return human-readable validation errors (empty list = OK)."""
-    errors: list[str] = []
+def expand_context(context: dict[str, str]) -> dict[str, str]:
+    """Add aliases so templates can use short or long placeholder names."""
+    preamble = context.get("DOCUMENT_PREAMBLE", "")
+    header = context.get("DOCUMENT_HEADER", "")
+    body = context.get("DOCUMENT_BODY", "")
+    footer = context.get("DOCUMENT_FOOTER", "")
+    content = context.get("CONTENT", f"{header}\n{body}\n{footer}".strip())
+
+    full_document = context.get(
+        "FULL_DOCUMENT",
+        "\n".join(
+            [
+                preamble,
+                r"\begin{document}",
+                content,
+                r"\end{document}",
+            ]
+        ).strip(),
+    )
+
+    expanded = dict(context)
+    expanded.update(
+        {
+            "DOCUMENT_PREAMBLE": preamble,
+            "DOCUMENT_HEADER": header,
+            "DOCUMENT_BODY": body,
+            "DOCUMENT_FOOTER": footer,
+            "CONTENT": content,
+            "PREAMBLE": preamble,
+            "HEADER": header,
+            "BODY": body,
+            "FOOTER": footer,
+            "FULL_DOCUMENT": full_document,
+        }
+    )
+    return expanded
+
+
+def validate_template_source(template_source: str, *, strict: bool = False) -> list[str]:
+    """Return warnings/errors. Non-strict mode allows flexible templates."""
+    issues: list[str] = []
     found = extract_placeholders(template_source)
-    missing = REQUIRED_PLACEHOLDERS - found
-    if missing:
-        errors.append(
-            "Missing required placeholders: "
-            + ", ".join(f"{{{{{k}}}}}" for k in sorted(missing))
+
+    if not found:
+        issues.append("No {{PLACEHOLDERS}} found — add at least {{CONTENT}} or {{BODY}}.")
+        return issues
+
+    if not found & INJECTION_POINTS:
+        issues.append(
+            "Add an injection point: {{CONTENT}}, {{BODY}}, {{HEADER}}, or {{FULL_DOCUMENT}}."
         )
-    unknown = found - KNOWN_PLACEHOLDERS
+
+    unknown = found - STANDARD_KEYS
     if unknown:
-        errors.append(
-            "Unknown placeholders (remove or rename): "
-            + ", ".join(f"{{{{{k}}}}}" for k in sorted(unknown))
+        msg = (
+            "Optional custom placeholders (will be left blank unless you add them to the app): "
+            + ", ".join(sorted(unknown))
         )
-    if r"\begin{document}" not in template_source:
-        errors.append("Template should include \\begin{document}")
-    if r"\end{document}" not in template_source:
-        errors.append("Template should include \\end{document}")
-    return errors
+        if strict:
+            issues.append(msg)
+        else:
+            issues.append(f"(notice) {msg}")
+
+    if strict:
+        if r"\begin{document}" not in template_source and "FULL_DOCUMENT" not in found:
+            issues.append("Include \\begin{document} or use {{FULL_DOCUMENT}} only.")
+        if r"\end{document}" not in template_source and "FULL_DOCUMENT" not in found:
+            issues.append("Include \\end{document} or use {{FULL_DOCUMENT}} only.")
+
+    return issues
+
+
+def render_template(
+    template_source: str,
+    context: dict[str, str],
+    *,
+    strict: bool = False,
+) -> str:
+    """Substitute placeholders; unknown tokens become empty unless strict."""
+    expanded = expand_context(context)
+    placeholders = extract_placeholders(template_source)
+
+    if strict:
+        missing = (placeholders & STANDARD_KEYS) - set(expanded.keys())
+        if missing:
+            raise ValueError(f"Template context missing keys: {sorted(missing)}")
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key in expanded:
+            return expanded[key]
+        if key in STANDARD_KEYS:
+            return ""
+        return ""  # custom placeholder — empty
+
+    result = PLACEHOLDER_PATTERN.sub(replace, template_source)
+
+    if "FULL_DOCUMENT" in placeholders and placeholders == {"FULL_DOCUMENT"}:
+        return expanded["FULL_DOCUMENT"]
+
+    return result
 
 
 def import_template_file(
     source_file: Path,
     templates_path: Path,
     name: str,
+    *,
+    strict: bool = False,
 ) -> Path:
-    """Copy an external .tex file into templates/ as <name>.template.tex."""
     templates_path.mkdir(parents=True, exist_ok=True)
     content = source_file.read_text(encoding="utf-8")
-    errors = validate_template_source(content)
-    if errors:
-        raise ValueError("\n".join(errors))
+    errors = validate_template_source(content, strict=strict)
+    blocking = [e for e in errors if not e.startswith("(notice)")]
+    if blocking and strict:
+        raise ValueError("\n".join(blocking))
 
     dest = template_path(templates_path, name)
     if dest.exists():
         raise FileExistsError(f"Template already exists: {dest.name}")
     shutil.copy2(source_file, dest)
     return dest
-
-
-def render_template(template_source: str, context: dict[str, str]) -> str:
-    """Substitute {{KEY}} placeholders; raises on missing required keys."""
-    placeholders = extract_placeholders(template_source)
-    missing = REQUIRED_PLACEHOLDERS & placeholders - set(context.keys())
-    if missing:
-        raise ValueError(f"Template context missing keys: {sorted(missing)}")
-
-    unknown = placeholders - KNOWN_PLACEHOLDERS
-    if unknown:
-        raise ValueError(f"Template uses unknown placeholders: {sorted(unknown)}")
-
-    def replace(match: re.Match[str]) -> str:
-        key = match.group(1)
-        return context.get(key, "")
-
-    return PLACEHOLDER_PATTERN.sub(replace, template_source)
 
 
 def build_chatgpt_prompt(
@@ -133,46 +212,41 @@ def build_chatgpt_prompt(
     template_source: str,
     sample_context: dict[str, str] | None = None,
 ) -> str:
-    """Full prompt to paste into ChatGPT when designing a custom template."""
     placeholders = sorted(extract_placeholders(template_source))
-    required = ", ".join(f"{{{{{p}}}}}" for p in sorted(REQUIRED_PLACEHOLDERS))
-    optional = "{{DOCUMENT_FOOTER}}"
 
     sample_block = ""
     if sample_context:
-        lines = [
-            "=== SAMPLE CONTENT THE APP WILL INJECT (truncated) ===",
-            "Do not paste this verbatim into the template; the app generates it.",
-        ]
+        expanded = expand_context(sample_context)
+        lines = ["=== SAMPLE INJECTED FRAGMENTS (truncated) ==="]
         for key in placeholders:
-            value = sample_context.get(key, "")
-            preview = value[:600] + ("…" if len(value) > 600 else "")
-            lines.append(f"\n--- {key} ({len(value)} chars) ---\n{preview}")
+            if key not in expanded:
+                continue
+            value = expanded[key]
+            preview = value[:500] + ("…" if len(value) > 500 else "")
+            lines.append(f"\n--- {{{{{key}}}}} ---\n{preview}")
         sample_block = "\n".join(lines)
 
     return "\n\n".join(
         [
             architecture_text.strip(),
-            "=== CURRENT TEMPLATE TO MODIFY ===",
-            f"Filename on disk: templates/{template_name}.template.tex",
+            "=== CURRENT TEMPLATE ===",
+            f"File: templates/{template_name}.template.tex",
             "",
             template_source.strip(),
             "",
-            "=== PLACEHOLDER CONTRACT ===",
-            f"Required (must appear exactly once): {required}",
-            f"Optional: {optional}",
-            f"Found in file: {', '.join(placeholders)}",
+            "=== FLEXIBLE PLACEHOLDERS (use any combination) ===",
+            "{{FULL_DOCUMENT}} — entire .tex (for pass-through wrappers)",
+            "{{CONTENT}} — header + all sections (most common body slot)",
+            "{{PREAMBLE}} / {{DOCUMENT_PREAMBLE}} — packages & layout setup",
+            "{{HEADER}} / {{DOCUMENT_HEADER}} — title block only",
+            "{{BODY}} / {{DOCUMENT_BODY}} — sections & questions only",
+            "{{FOOTER}} / {{DOCUMENT_FOOTER}} — closing block",
             "",
+            f"Detected in file: {', '.join(placeholders) or '(none)'}",
             sample_block,
-            "=== YOUR TASK (ChatGPT) ===",
-            "1. Return ONE complete LaTeX file ready to save as "
-            f"`{template_name}.template.tex` (or a new name if asked).",
-            "2. Keep ALL required {{PLACEHOLDERS}} spelled exactly as shown.",
-            "3. Style only the wrapper: fonts, margins, colors, headers/footers, "
-            "page size. Do NOT hard-code exam titles or questions.",
-            "4. DOCUMENT_BODY already contains every section and question table; "
-            "do not duplicate question tables in the template.",
-            "5. Ensure the file compiles with Tectonic (pdfLaTeX, utf8 inputenc).",
-            "6. Output ONLY the .tex file content — no markdown fences.",
+            "=== TASK ===",
+            "Return a complete .template.tex file. Improve visual design (fonts, margins, "
+            "headers, section styling). Keep placeholder names the app recognizes. "
+            "Do NOT hard-code exam questions. Output raw LaTeX only.",
         ]
     )

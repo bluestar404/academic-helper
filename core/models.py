@@ -109,6 +109,9 @@ class ExamPaper(BaseModel):
     sections: list[Section] = Field(min_length=1)
     duration_minutes: PositiveMarks | None = None
     total_marks: PositiveMarks
+    paper_code: OptionalSanitizedStr = None
+    exam_code: OptionalSanitizedStr = None
+    time_display: OptionalSanitizedStr = None
 
     @model_validator(mode="after")
     def validate_exam_paper(self) -> ExamPaper:
